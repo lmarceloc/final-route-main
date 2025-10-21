@@ -245,9 +245,9 @@ export const AddDeliveryForm = ({ onAdd }: AddDeliveryFormProps) => {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="origin">Origem</SelectItem>
-                <SelectItem value="stop">Parada</SelectItem>
-                <SelectItem value="destination">Destino Final</SelectItem>
+                <SelectItem value="origin" className="focus:bg-blue-100 dark:focus:bg-blue-800">Origem</SelectItem>
+                <SelectItem value="stop" className="focus:bg-blue-100 dark:focus:bg-blue-800">Parada</SelectItem>
+                <SelectItem value="destination" className="focus:bg-blue-100 dark:focus:bg-blue-800">Destino Final</SelectItem>
               </SelectContent>
             </Select>
           </div>

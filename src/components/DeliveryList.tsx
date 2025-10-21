@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/card';
 interface DeliveryListProps {
   deliveries: Delivery[];
   onReorder: (result: DropResult) => void;
-  onRemove: (id: string) => void;
+  onRemove: (deliveryId: string) => void;
   onEdit: (id: string) => void;
 }
 

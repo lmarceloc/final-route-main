@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Delivery } from '@/types/delivery';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Delivery } from '@/types/delivery';
-import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { geocodeAddress } from '@/components/geocode';
-import { MapPin, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface EditDeliveryDialogProps {
   delivery: Delivery | null;
@@ -17,40 +22,24 @@ interface EditDeliveryDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-export const EditDeliveryDialog = ({ delivery, onUpdate, onOpenChange }: EditDeliveryDialogProps) => {
-  const [formData, setFormData] = useState<Partial<Delivery & { lat?: number | string; lng?: number | string }>>({});
-  const [isGeocoding, setIsGeocoding] = useState(false);
+const EditDeliveryDialog = ({ delivery, onUpdate, onOpenChange }: EditDeliveryDialogProps) => {
+  const [formData, setFormData] = useState<Partial<Delivery>>({});
 
   useEffect(() => {
     if (delivery) {
       setFormData({
         ...delivery,
-        lat: delivery.coordinates?.[0] ?? '',
-        lng: delivery.coordinates?.[1] ?? '',
+        // Leaflet usa [lat, lng], então garantimos a ordem correta
+        lat: delivery.coordinates?.[0],
+        lng: delivery.coordinates?.[1],
       });
     }
   }, [delivery]);
 
   if (!delivery) return null;
 
-  const handleChange = (field: keyof typeof formData, value: any) => {
+  const handleChange = (field: keyof Delivery | 'lat' | 'lng', value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleRecode = async () => {
-    if (!formData.address) return;
-    setIsGeocoding(true);
-    try {
-      const geocoded = await geocodeAddress(formData.address);
-      if (geocoded) {
-        setFormData(prev => ({ ...prev, lat: geocoded.lat, lng: geocoded.lng }));
-        toast.info('Endereço relocalizado no mapa!');
-      } else {
-        toast.error('Não foi possível localizar o novo endereço.');
-      }
-    } finally {
-      setIsGeocoding(false);
-    }
   };
 
   const handleSave = async () => {
@@ -63,6 +52,7 @@ export const EditDeliveryDialog = ({ delivery, onUpdate, onOpenChange }: EditDel
       coordinates: !isNaN(lat) && !isNaN(lng) ? [lat, lng] : delivery.coordinates,
     };
 
+    // Salvar no Supabase
     const { error } = await supabase
       .from('deliveries')
       .update({
@@ -78,7 +68,6 @@ export const EditDeliveryDialog = ({ delivery, onUpdate, onOpenChange }: EditDel
     } else {
       onUpdate(updatedDelivery);
       toast.success('Entrega atualizada com sucesso!');
-      onOpenChange(false);
     }
   };
 
@@ -87,21 +76,18 @@ export const EditDeliveryDialog = ({ delivery, onUpdate, onOpenChange }: EditDel
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>Editar Entrega</DialogTitle>
+          {/* 1. Correção do aviso de acessibilidade */}
           <DialogDescription>
-            Edite os detalhes da entrega. Clique em salvar quando terminar.
+            Edite os detalhes da entrega aqui. Clique em salvar quando terminar.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="space-y-2">
             <Label htmlFor="address">Endereço</Label>
-            <div className="flex items-center gap-2">
-              <Input id="address" value={formData.address || ''} onChange={(e) => handleChange('address', e.target.value)} />
-              <Button variant="outline" size="icon" onClick={handleRecode} disabled={isGeocoding} title="Relocalizar endereço">
-                {isGeocoding ? <RefreshCw className="animate-spin" /> : <MapPin />}
-              </Button>
-            </div>
+            <Input id="address" value={formData.address || ''} onChange={(e) => handleChange('address', e.target.value)} />
           </div>
 
+          {/* 3. Adição dos campos de Latitude e Longitude */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="lat">Latitude</Label>
@@ -120,6 +106,7 @@ export const EditDeliveryDialog = ({ delivery, onUpdate, onOpenChange }: EditDel
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                {/* 2. Correção da cor de hover */}
                 <SelectItem value="origin" className="focus:bg-blue-100 dark:focus:bg-blue-800">Origem</SelectItem>
                 <SelectItem value="stop" className="focus:bg-blue-100 dark:focus:bg-blue-800">Parada</SelectItem>
                 <SelectItem value="destination" className="focus:bg-blue-100 dark:focus:bg-blue-800">Destino Final</SelectItem>
