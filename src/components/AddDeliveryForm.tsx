@@ -1,0 +1,283 @@
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Card } from '@/components/ui/card';
+import { Plus, Upload, Loader2 } from 'lucide-react';
+import { Delivery } from '@/types/delivery';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import { geocodeAddress } from '@/components/geocode';
+
+interface AddDeliveryFormProps {
+  onAdd: (delivery: Omit<Delivery, 'id' | 'priority'> | Omit<Delivery, 'id' | 'priority'>[], isUrgent?: boolean) => void;
+}
+
+export const AddDeliveryForm = ({ onAdd }: AddDeliveryFormProps) => {
+  const [address, setAddress] = useState('');
+  const [lat, setLat] = useState('');
+  const [lng, setLng] = useState('');
+  const [type, setType] = useState<Delivery['type']>('stop');
+  const [isUrgent, setIsUrgent] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [isProcessingInvoice, setIsProcessingInvoice] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!address) return;
+
+    let coordinates: [number, number] | undefined =
+      lat && lng ? [parseFloat(lat), parseFloat(lng)] : undefined;
+
+    // If no coordinates, try to geocode the address
+    if (!coordinates && address) {
+      setIsGeocoding(true);
+      try {
+        const geocoded = await geocodeAddress(address);
+        if (geocoded) {
+          coordinates = [geocoded.lat, geocoded.lng];
+          toast.info('Endereço localizado no mapa!');
+        }
+      } finally {
+        setIsGeocoding(false);
+      }
+    }
+
+    onAdd({
+      address,
+      coordinates,
+      type,
+      isUrgent,
+    }, isUrgent);
+
+    setAddress('');
+    setLat('');
+    setLng('');
+    setType('stop');
+    setIsUrgent(false);
+  };
+
+  const handleInvoiceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validar tipo de arquivo
+    const isXML = file.name.toLowerCase().endsWith('.xml');
+    const isPDF = file.type.includes('pdf');
+    const isImage = file.type.includes('image');
+
+    if (!isXML && !isPDF && !isImage) {
+      toast.error('Por favor, envie um PDF, XML ou imagem da nota fiscal');
+      return;
+    }
+
+    setIsProcessingInvoice(true);
+
+    try {
+      const reader = new FileReader();
+
+      // Se for XML, ler como texto. Caso contrário, como base64
+      if (isXML) {
+        reader.readAsText(file);
+      } else {
+        reader.readAsDataURL(file);
+      }
+
+      reader.onload = async () => {
+        try {
+          const fileData = reader.result as string;
+
+          // Chamar edge function para processar nota fiscal
+          const { data, error } = await supabase.functions.invoke('process-invoice', {
+            body: {
+              fileData,
+              fileType: isXML ? 'xml' : file.type
+            }
+          });
+
+          if (error) throw error;
+
+          if (data?.origin || data?.destination) {
+            const newDeliveries: Omit<Delivery, 'id' | 'priority'>[] = [];
+
+            // Adiciona a Origem (se existir)
+            if (data.origin?.address) {
+              const originCoords = await geocodeAddress(data.origin.address);
+              newDeliveries.push({
+                address: data.origin.address,
+                coordinates: originCoords ? [originCoords.lat, originCoords.lng] : undefined,
+                type: 'origin',
+              });
+              if (originCoords) {
+                toast.info('Endereço de origem localizado no mapa!');
+              }
+            }
+
+            // Adiciona o Destino (se existir)
+            if (data.destination?.address) {
+              const destCoords = await geocodeAddress(data.destination.address);
+              newDeliveries.push({
+                address: data.destination.address,
+                coordinates: destCoords ? [destCoords.lat, destCoords.lng] : undefined,
+                type: 'destination',
+              });
+              if (destCoords) {
+                toast.info('Endereço de destino localizado no mapa!');
+              }
+            }
+
+            onAdd(newDeliveries);
+            toast.success('Nota fiscal processada! Origem e destino adicionados.');
+          
+          } else {
+            toast.error('Não foi possível extrair origem e destino da nota fiscal');
+          }
+
+        } catch (error) {
+          console.error('Erro ao processar nota fiscal:', error);
+          toast.error('Erro ao processar nota fiscal');
+        } finally {
+          setIsProcessingInvoice(false);
+          // Limpar input
+          e.target.value = '';
+        }
+      };
+
+        reader.onerror = () => {
+          toast.error('Erro ao ler arquivo');
+          setIsProcessingInvoice(false);
+        };
+      } catch (error) {
+        console.error('Erro ao processar nota fiscal:', error);
+        toast.error('Erro ao processar nota fiscal');
+        setIsProcessingInvoice(false);
+      }
+    };
+
+    return (
+      <Card className="p-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Upload de Nota Fiscal */}
+          <div className="space-y-2 pb-4 border-b border-border">
+            <Label htmlFor="invoice" className="text-sm font-medium">
+              Nota Fiscal (opcional)
+            </Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="invoice"
+                type="file"
+                accept=".pdf,.xml,image/*"
+                onChange={handleInvoiceUpload}
+                disabled={isProcessingInvoice}
+                className="hidden"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => document.getElementById('invoice')?.click()}
+                disabled={isProcessingInvoice}
+                className="w-full"
+              >
+                {isProcessingInvoice ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processando nota fiscal...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload NF (extrai origem e destino)
+                  </>
+                )}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Envie uma nota fiscal (PDF, XML ou imagem) para extrair origem e destino automaticamente
+            </p>
+          </div>
+
+          <div className="space-y-2 pt-4 border-t border-border">
+            <Label htmlFor="address">Endereço Completo</Label>
+            <Input
+              id="address"
+              placeholder="Ex: R. Cel. Francisco Ribas, 1012 - Centro, Ponta Grossa - PR, 84010-260"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="lat">Latitude (opcional)</Label>
+              <Input
+                id="lat"
+                type="number"
+                step="any"
+                placeholder="-23.550520"
+                value={lat}
+                onChange={(e) => setLat(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="lng">Longitude (opcional)</Label>
+              <Input
+                id="lng"
+                type="number"
+                step="any"
+                placeholder="-46.633308"
+                value={lng}
+                onChange={(e) => setLng(e.target.value)}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Se não informar, usaremos o endereço para localizar no mapa
+          </p>
+
+          <div className="space-y-2">
+            <Label htmlFor="type">Tipo</Label>
+            <Select value={type} onValueChange={(value: Delivery['type']) => setType(value)}>
+              <SelectTrigger id="type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="origin">Origem</SelectItem>
+                <SelectItem value="stop">Parada</SelectItem>
+                <SelectItem value="destination">Destino Final</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {type === 'stop' && (
+            <div className="flex items-center space-x-2">
+              <Checkbox id="urgent" checked={isUrgent} onCheckedChange={(checked) => setIsUrgent(!!checked)} />
+              <label
+                htmlFor="urgent"
+                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              >
+                Marcar como entrega urgente (fixar após a origem)
+              </label>
+            </div>
+          )}
+
+          <Button type="submit" className="w-full" disabled={isGeocoding}>
+            {isGeocoding ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Geocodificando...
+              </>
+            ) : (
+              <>
+                <Plus className="mr-2 h-4 w-4" />
+                Adicionar Entrega
+              </>
+            )}
+          </Button>
+        </form>
+      </Card>
+    );
+  };
