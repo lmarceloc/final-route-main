@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { deliveries, urgentDeliveryId, fixDestinationAtEnd } = body;
+    const { deliveries, fixDestinationAtEnd } = body;
 
     if (!Array.isArray(deliveries) || deliveries.length === 0) {
       return new Response(
@@ -46,13 +46,17 @@ Deno.serve(async (req) => {
       );
     }
 
-    const GEMINI_MODEL = 'gemini-2.0-flash-exp';
+    const GEMINI_MODEL = 'gemini-1.5-flash';
 
-    const origin = deliveries[0];
-    const destination = deliveries[deliveries.length - 1];
-    const urgentDelivery = deliveries.find(
-      (d: any, i: number) => d.isUrgent && i > 0 && i < deliveries.length - 1
-    );
+    // ✅ Correção: Encontra a origem e o destino pelo seu tipo, não pela posição.
+    const origin = deliveries.find((d: any) => d.type === 'origin');
+    const destination = deliveries.find((d: any) => d.type === 'destination');
+
+    const urgentDelivery = deliveries.find((d: any) => d.is_urgent);
+
+    if (urgentDelivery) {
+      console.log(`✅ Entrega Urgente Identificada: ID ${urgentDelivery.id}`);
+    }
 
     // 🔹 Criação do Prompt para o Gemini
     const prompt = `Você é um especialista em otimização de rotas de entrega.
@@ -64,7 +68,7 @@ ${deliveries.map((d: any, i: number) =>
 ).join('\n')}
 
 REGRAS DE ORDENAÇÃO:
-1. O primeiro item na lista de entrada (${origin ? origin.address : 'a origem'}) DEVE ser sempre a primeira parada na sua ordem otimizada.
+1. A entrega do tipo "Origem" (${origin ? origin.address : 'não especificada'}) DEVE ser sempre a primeira parada na sua ordem otimizada.
 2. ${urgentDelivery
     ? `A entrega URGENTE (ID: ${urgentDelivery.id}) deve ser a segunda parada, logo após a ORIGEM (regra 1).`
     : 'Não há entregas urgentes.'}
