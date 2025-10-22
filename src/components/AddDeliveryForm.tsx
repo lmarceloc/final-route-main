@@ -60,102 +60,47 @@ export const AddDeliveryForm = ({ onAdd }: AddDeliveryFormProps) => {
     setIsUrgent(false);
   };
 
-  const handleInvoiceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleInvoiceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
 
-    // Validar tipo de arquivo
-    const isXML = file.name.toLowerCase().endsWith('.xml');
-    const isPDF = file.type.includes('pdf');
-    const isImage = file.type.includes('image');
+  try {
+    const xmlFiles = await Promise.all(
+      Array.from(files).map(async file => ({
+        name: file.name,
+        fileData: await file.text(),
+        fileType: "xml"
+      }))
+    );
 
-    if (!isXML && !isPDF && !isImage) {
-      toast.error('Por favor, envie um PDF, XML ou imagem da nota fiscal');
+    const { data, error } = await supabase.functions.invoke("process-invoice", {
+      body: { files: xmlFiles }
+    });
+
+    if (error || data?.error) {
+      toast.error("Erro ao processar nota fiscal", { description: error?.message || data?.error });
       return;
     }
 
-    setIsProcessingInvoice(true);
+    if (data.sameOrigin && data.origin && data.destinations.length > 0) {
+      const deliveriesToAdd = [
+        { type: "origin", address: data.origin.address },
+        ...data.destinations.map((d: any) => ({
+          type: "stop",
+          address: d.address,
+        })),
+      ];
+      onAdd(deliveriesToAdd);
+      toast.success(`Foram adicionadas ${data.destinations.length} entregas com origem única.`);
+    } else {
+      toast.error("Não foi possível identificar origem única entre as notas.");
+    }
+  } catch (err: any) {
+    console.error("Erro geral ao processar NFs:", err);
+    toast.error("Erro ao processar notas fiscais", { description: err.message });
+  }
+};
 
-    try {
-      const reader = new FileReader();
-
-      // Se for XML, ler como texto. Caso contrário, como base64
-      if (isXML) {
-        reader.readAsText(file);
-      } else {
-        reader.readAsDataURL(file);
-      }
-
-      reader.onload = async () => {
-        try {
-          const fileData = reader.result as string;
-
-          // Chamar edge function para processar nota fiscal
-          const { data, error } = await supabase.functions.invoke('process-invoice', {
-            body: {
-              fileData,
-              fileType: isXML ? 'xml' : file.type
-            }
-          });
-
-          if (error) throw error;
-
-          if (data?.origin || data?.destination) {
-            const newDeliveries: Omit<Delivery, 'id' | 'priority'>[] = [];
-
-            // Adiciona a Origem (se existir)
-            if (data.origin?.address) {
-              const originCoords = await geocodeAddress(data.origin.address);
-              newDeliveries.push({
-                address: data.origin.address,
-                coordinates: originCoords ? [originCoords.lat, originCoords.lng] : undefined,
-                type: 'origin',
-              });
-              if (originCoords) {
-                toast.info('Endereço de origem localizado no mapa!');
-              }
-            }
-
-            // Adiciona o Destino (se existir)
-            if (data.destination?.address) {
-              const destCoords = await geocodeAddress(data.destination.address);
-              newDeliveries.push({
-                address: data.destination.address,
-                coordinates: destCoords ? [destCoords.lat, destCoords.lng] : undefined,
-                type: 'destination',
-              });
-              if (destCoords) {
-                toast.info('Endereço de destino localizado no mapa!');
-              }
-            }
-
-            onAdd(newDeliveries);
-            toast.success('Nota fiscal processada! Origem e destino adicionados.');
-          
-          } else {
-            toast.error('Não foi possível extrair origem e destino da nota fiscal');
-          }
-
-        } catch (error) {
-          console.error('Erro ao processar nota fiscal:', error);
-          toast.error('Erro ao processar nota fiscal');
-        } finally {
-          setIsProcessingInvoice(false);
-          // Limpar input
-          e.target.value = '';
-        }
-      };
-
-        reader.onerror = () => {
-          toast.error('Erro ao ler arquivo');
-          setIsProcessingInvoice(false);
-        };
-      } catch (error) {
-        console.error('Erro ao processar nota fiscal:', error);
-        toast.error('Erro ao processar nota fiscal');
-        setIsProcessingInvoice(false);
-      }
-    };
 
     return (
       <Card className="p-4">
@@ -195,7 +140,7 @@ export const AddDeliveryForm = ({ onAdd }: AddDeliveryFormProps) => {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Envie uma nota fiscal (PDF, XML ou imagem) para extrair origem e destino automaticamente
+              Envie uma nota fiscal ( XML ) para extrair origem e destino automaticamente
             </p>
           </div>
 

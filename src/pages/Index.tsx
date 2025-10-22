@@ -20,7 +20,6 @@ interface RouteSummary {
 
 type SupabaseDelivery = Database['public']['Tables']['deliveries']['Row'];
 
-// 🔹 Mapeia campos do Supabase para o modelo Delivery
 const mapSupabaseToDelivery = (supabaseDelivery: SupabaseDelivery): Delivery => {
   const { coordinates, ...rest } = supabaseDelivery;
   let parsedCoords: [number, number] | undefined = undefined;
@@ -33,8 +32,8 @@ const mapSupabaseToDelivery = (supabaseDelivery: SupabaseDelivery): Delivery => 
       if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === "number" && typeof parsed[1] === "number") {
         parsedCoords = [parsed[0], parsed[1]];
       }
-    } catch (e) {
-      // Ignora erro
+    } catch {
+      // ignora
     }
   } else if (typeof coordinates === "object" && coordinates !== null) {
     const lat = (coordinates as any).lat ?? (coordinates as any).latitude;
@@ -51,7 +50,6 @@ const mapSupabaseToDelivery = (supabaseDelivery: SupabaseDelivery): Delivery => 
   };
 };
 
-// 🔹 Função de ordenação central
 const sortDeliveries = (list: Delivery[]) => {
   return [
     ...list.filter(d => d.type === "origin"),
@@ -67,7 +65,6 @@ const Index = () => {
   const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
   const [isOptimizing, setIsOptimizing] = useState(false);
 
-  // 🔹 Busca inicial
   useEffect(() => {
     const fetchDeliveries = async () => {
       const { data, error } = await supabase.from("deliveries").select("*");
@@ -76,16 +73,12 @@ const Index = () => {
       } else {
         const mappedData = (data || []).map(mapSupabaseToDelivery);
         const ordered = sortDeliveries(mappedData);
-        console.log("🚚 Entregas ordenadas automaticamente:", ordered.map(d =>
-          `${d.type.toUpperCase()} ${d.isUrgent ? "(URGENTE)" : ""} - ${d.address}`
-        ));
         setDeliveries(ordered);
       }
     };
     fetchDeliveries();
   }, []);
 
-  // 🔹 Mantém a lista sempre ordenada quando muda
   useEffect(() => {
     setDeliveries(prev => sortDeliveries([...prev]));
   }, [deliveries.length]);
@@ -147,7 +140,6 @@ const Index = () => {
     setDeliveries(sortDeliveries(items));
   };
 
-  // 🔹 Otimização com origem, urgentes, paradas e destino
   const handleOptimizeRoute = async () => {
     if (deliveries.length < 2) {
       toast.error("Adicione pelo menos 2 entregas para otimizar a rota.");
@@ -155,6 +147,7 @@ const Index = () => {
     }
 
     const origin = deliveries.find(d => d.type === "origin");
+    const stops = deliveries.filter(d => d.type === "stop");
     const destination = deliveries.find(d => d.type === "destination");
 
     if (!origin) {
@@ -166,10 +159,7 @@ const Index = () => {
     setRouteSummary(null);
 
     try {
-      const urgentes = deliveries.filter(d => d.isUrgent && d.type !== "origin" && d.type !== "destination");
-      const naoUrgentes = deliveries.filter(d => !d.isUrgent && d.type !== "origin" && d.type !== "destination");
-      const ordered = [origin, ...urgentes, ...naoUrgentes, ...(destination ? [destination] : [])];
-
+      const ordered = [origin, ...stops, ...(destination ? [destination] : [])];
       const { data, error } = await supabase.functions.invoke("optimize-route", {
         body: { deliveries: ordered, fixDestinationAtEnd: !!destination },
       });
@@ -208,14 +198,15 @@ const Index = () => {
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex h-screen bg-gray-100 dark:bg-gray-900">
-        <Sidebar className="flex flex-col">
-          <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+        <Sidebar className="flex flex-col justify-between">
+          {/* 🔹 Parte superior fixa */}
+          <div className="p-4 space-y-4">
             <AddDeliveryForm onAdd={handleAddDelivery} />
 
             <Button
               onClick={handleOptimizeRoute}
               disabled={isOptimizing || deliveries.length < 2}
-              className="w-full bg-green-600 text-white hover:bg-green-700"
+              className="w-full bg-green-600 text-white hover:bg-green-700 sticky top-0 z-10"
             >
               {isOptimizing ? (
                 <>
@@ -236,11 +227,14 @@ const Index = () => {
                   🤖 Rota Otimizada ✅
                 </p>
                 <p className="text-xs text-green-700 dark:text-green-300 mt-1">
-                  {routeSummary.stops} paradas • {routeSummary.distance} km
+                  {routeSummary.stops} paradas • {routeSummary.distance?.toFixed(3)} km
                 </p>
               </div>
             )}
+          </div>
 
+          {/* 🔹 Lista de entregas com scroll */}
+          <div className="flex-1 overflow-y-auto px-4 pb-20">
             <DeliveryList
               deliveries={deliveries}
               onEdit={handleEdit}
@@ -250,6 +244,7 @@ const Index = () => {
           </div>
         </Sidebar>
 
+        {/* 🔹 Mapa principal */}
         <main className="flex-1">
           <DeliveryMap key={JSON.stringify(deliveries.map(d => d.id))} deliveries={deliveries} />
         </main>

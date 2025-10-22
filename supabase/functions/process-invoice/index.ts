@@ -1,110 +1,130 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @noAuth
+// Setup type definitions for built-in Supabase Runtime APIs
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+console.log("📦 Process Invoice Function Initialized");
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Função para processar XML de nota fiscal
-function processXMLInvoice(xmlData: string, corsHeaders: Record<string, string>) {
-  try {
-    console.log('Iniciando parse do XML...');
-    
-    // Remover namespaces para simplificar o matching com regex
-    const xmlWithoutNamespaces = xmlData.replace(/<(\/)?([a-zA-Z0-9:]+)/g, "<$1$2");
+// 🔹 Monta endereço legível
+function buildAddress(addressData: { [key: string]: string | undefined }): string | null {
+  const { logradouro, numero, complemento, bairro, municipio, uf, cep } = addressData;
+  if (!logradouro && !municipio) return null;
+  return `${logradouro || ''}${numero ? ', ' + numero : ''}${complemento ? ' - ' + complemento : ''}${bairro ? ' - ' + bairro : ''}, ${municipio || ''}${uf ? ' - ' + uf : ''}${cep ? ', ' + cep : ''}`.trim();
+}
 
-    // Extrair endereço do emitente (origem)
-    const emitMatch = xmlWithoutNamespaces.match(/<enderEmit>([\s\S]*?)<\/enderEmit>/);
-    let originAddress = null;
-    
-    if (emitMatch) {
-      const emitData = emitMatch[1];
-      const logradouro = emitData.match(/<xLgr>([^<]+)<\/xLgr>/)?.[1] || '';
-      const numero = emitData.match(/<nro>([^<]+)<\/nro>/)?.[1] || '';
-      const complemento = emitData.match(/<xCpl>([^<]+)<\/xCpl>/)?.[1] || '';
-      const bairro = emitData.match(/<xBairro>([^<]+)<\/xBairro>/)?.[1] || '';
-      const municipio = emitData.match(/<xMun>([^<]+)<\/xMun>/)?.[1] || '';
-      const uf = emitData.match(/<UF>([^<]+)<\/UF>/)?.[1] || '';
-      const cep = emitData.match(/<CEP>([^<]+)<\/CEP>/)?.[1] || '';
-      
-      if (logradouro && municipio) {
-        originAddress = `${logradouro}${numero ? ', ' + numero : ''}${complemento ? ' - ' + complemento : ''}${bairro ? ' - ' + bairro : ''}, ${municipio}${uf ? ' - ' + uf : ''}${cep ? ', ' + cep : ''}`;
+// 🔹 Extrai origem e destino de um XML NF-e/CT-e
+function processXMLInvoice(xmlData: string) {
+  try {
+    // Remove namespaces padrão e prefixados
+    const xml = xmlData
+      .replace(/xmlns(:\w+)?="[^"]*"/g, "")
+      .replace(/<\w+:(\w+)/g, "<$1")
+      .replace(/<\/\w+:(\w+)/g, "</$1");
+
+    const isNFe = xml.includes("<NFe") || xml.includes("<nfeProc");
+    const isCTe = xml.includes("<CTe") || xml.includes("<cteProc");
+
+    let origin = null;
+    let destination = null;
+
+    if (isNFe) {
+      const emit = xml.match(/<emit>[\s\S]*?<enderEmit>([\s\S]*?)<\/enderEmit>[\s\S]*?<\/emit>/i);
+      if (emit) {
+        const data = emit[1];
+        origin = {
+          name: xml.match(/<emit>[\s\S]*?<xNome>([^<]+)<\/xNome>/i)?.[1]?.trim(),
+          cnpj: xml.match(/<emit>[\s\S]*?<CNPJ>([^<]+)<\/CNPJ>/i)?.[1]?.trim(),
+          address: buildAddress({
+            logradouro: data.match(/<xLgr>([^<]+)<\/xLgr>/i)?.[1]?.trim(),
+            numero: data.match(/<nro>([^<]+)<\/nro>/i)?.[1]?.trim(),
+            complemento: data.match(/<xCpl>([^<]+)<\/xCpl>/i)?.[1]?.trim(),
+            bairro: data.match(/<xBairro>([^<]+)<\/xBairro>/i)?.[1]?.trim(),
+            municipio: data.match(/<xMun>([^<]+)<\/xMun>/i)?.[1]?.trim(),
+            uf: data.match(/<UF>([^<]+)<\/UF>/i)?.[1]?.trim(),
+            cep: data.match(/<CEP>([^<]+)<\/CEP>/i)?.[1]?.trim(),
+          }),
+        };
+      }
+
+      const dest = xml.match(/<dest>[\s\S]*?<enderDest>([\s\S]*?)<\/enderDest>[\s\S]*?<\/dest>/i);
+      if (dest) {
+        const data = dest[1];
+        destination = {
+          name: xml.match(/<dest>[\s\S]*?<xNome>([^<]+)<\/xNome>/i)?.[1]?.trim(),
+          cnpj: xml.match(/<dest>[\s\S]*?<CNPJ>([^<]+)<\/CNPJ>/i)?.[1]?.trim(),
+          address: buildAddress({
+            logradouro: data.match(/<xLgr>([^<]+)<\/xLgr>/i)?.[1]?.trim(),
+            numero: data.match(/<nro>([^<]+)<\/nro>/i)?.[1]?.trim(),
+            complemento: data.match(/<xCpl>([^<]+)<\/xCpl>/i)?.[1]?.trim(),
+            bairro: data.match(/<xBairro>([^<]+)<\/xBairro>/i)?.[1]?.trim(),
+            municipio: data.match(/<xMun>([^<]+)<\/xMun>/i)?.[1]?.trim(),
+            uf: data.match(/<UF>([^<]+)<\/UF>/i)?.[1]?.trim(),
+            cep: data.match(/<CEP>([^<]+)<\/CEP>/i)?.[1]?.trim(),
+          }),
+        };
       }
     }
-    
-    // Extrair endereço do destinatário (destino)
-    const destMatch = xmlWithoutNamespaces.match(/<enderDest>([\s\S]*?)<\/enderDest>/);
-    let destinationAddress = null;
-    
-    if (destMatch) {
-      const destData = destMatch[1];
-      const logradouro = destData.match(/<xLgr>([^<]+)<\/xLgr>/)?.[1] || '';
-      const numero = destData.match(/<nro>([^<]+)<\/nro>/)?.[1] || '';
-      const complemento = destData.match(/<xCpl>([^<]+)<\/xCpl>/)?.[1] || '';
-      const bairro = destData.match(/<xBairro>([^<]+)<\/xBairro>/)?.[1] || '';
-      const municipio = destData.match(/<xMun>([^<]+)<\/xMun>/)?.[1] || '';
-      const uf = destData.match(/<UF>([^<]+)<\/UF>/)?.[1] || '';
-      const cep = destData.match(/<CEP>([^<]+)<\/CEP>/)?.[1] || '';
-      
-      if (logradouro && municipio) {
-        destinationAddress = `${logradouro}${numero ? ', ' + numero : ''}${complemento ? ' - ' + complemento : ''}${bairro ? ' - ' + bairro : ''}, ${municipio}${uf ? ' - ' + uf : ''}${cep ? ', ' + cep : ''}`;
-      }
+
+    if (isCTe) {
+      const ideMatch = xml.match(/<ide>([\s\S]*?)<\/ide>/i);
+      const municipioOrigem = ideMatch?.[1]?.match(/<xMunIni>([^<]+)<\/xMunIni>/i)?.[1];
+      const ufOrigem = ideMatch?.[1]?.match(/<UFIni>([^<]+)<\/UFIni>/i)?.[1];
+      const municipioDestino = ideMatch?.[1]?.match(/<xMunFim>([^<]+)<\/xMunFim>/i)?.[1];
+      const ufDestino = ideMatch?.[1]?.match(/<UFFim>([^<]+)<\/UFFim>/i)?.[1];
+      origin = { address: `${municipioOrigem}, ${ufOrigem}` };
+      destination = { address: `${municipioDestino}, ${ufDestino}` };
     }
-    
-    console.log('Endereços extraídos do XML:', { originAddress, destinationAddress });
-    
-    const extractedData = {
-      origin: { address: originAddress },
-      destination: { address: destinationAddress }
-    };
-    
-    return new Response(
-      JSON.stringify(extractedData),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-    
-  } catch (error) {
-    console.error('Erro ao processar XML:', error);
-    return new Response(
-      JSON.stringify({ error: 'Erro ao processar arquivo XML' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+
+    return { origin, destination };
+  } catch (err) {
+    console.error("Erro ao processar XML:", err);
+    throw err;
   }
 }
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+// 🔹 Main handler
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { fileData, fileType } = await req.json();
-    
-    if (!fileData) {
-      return new Response(
-        JSON.stringify({ error: 'Arquivo não fornecido' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const { files } = await req.json();
+
+    if (!Array.isArray(files) || files.length === 0) {
+      return new Response(JSON.stringify({ error: "Nenhum arquivo XML enviado" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // Se for XML, processar diretamente
-    if (fileType === 'xml') {
-      console.log('Processando arquivo XML...');
-      return processXMLInvoice(fileData, corsHeaders);
-    }
+    const results = files.map(f => processXMLInvoice(f.fileData));
+    const origins = results.map(r => r.origin).filter(Boolean);
+    const destinations = results.map(r => r.destination).filter(Boolean);
 
-    // Se não for XML, retorna erro pois a API da Groq não suporta imagens/PDFs
-    console.log('Tipo de arquivo não suportado para extração automática:', fileType);
-    return new Response(
-      JSON.stringify({ error: 'Apenas arquivos XML são suportados para extração automática no momento.' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    const sameOrigin = origins.length > 0 && origins.every(o =>
+      o?.address === origins[0]?.address && o?.cnpj === origins[0]?.cnpj
     );
 
-  } catch (error) {
-    console.error('Erro ao processar nota fiscal:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Erro desconhecido' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({
+      sameOrigin,
+      origin: sameOrigin ? origins[0] : origins,
+      destinations,
+      totalFiles: files.length,
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    console.error("❌ Erro geral:", err);
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

@@ -1,174 +1,251 @@
 // supabase/functions/optimize-route/index.ts
-// Edge Function para otimizar rotas usando Gemini AI
+// 🔹 Versão melhorada: usa 2-opt para otimização mais eficiente
 
 Deno.serve(async (req) => {
   const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
 
-  // Trata requisições preflight (CORS)
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    if (req.method !== 'POST') {
-      return new Response('Method Not Allowed', {
-        status: 405,
-        headers: corsHeaders,
-      });
+    if (req.method !== "POST") {
+      return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
     }
 
     const body = await req.json();
-    const { deliveries, fixDestinationAtEnd } = body;
+    const { deliveries, urgentDeliveryId, fixDestinationAtEnd } = body;
 
     if (!Array.isArray(deliveries) || deliveries.length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'deliveries must be a non-empty array' }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      return new Response(JSON.stringify({ error: "deliveries must be a non-empty array" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // 🧭 Verifica se há coordenadas válidas
+    const hasCoordinates = deliveries.every(
+      (d: any) => Array.isArray(d.coordinates) && d.coordinates.length === 2
+    );
+
+    // 🧮 Se há coordenadas → usa algoritmo otimizado
+    if (hasCoordinates) {
+      console.log("🧭 Otimizando rota via Haversine + 2-opt");
+
+      // Haversine distance
+      const toRad = (deg: number) => (deg * Math.PI) / 180;
+      const haversine = (a: number[], b: number[]) => {
+        if (!a || !b || a.length !== 2 || b.length !== 2) return Infinity;
+        const R = 6371;
+        const dLat = toRad(b[0] - a[0]);
+        const dLon = toRad(b[1] - a[1]);
+        const lat1 = toRad(a[0]);
+        const lat2 = toRad(b[0]);
+        const sinDlat = Math.sin(dLat / 2);
+        const sinDlon = Math.sin(dLon / 2);
+        const c = 2 * Math.asin(
+          Math.sqrt(sinDlat ** 2 + Math.cos(lat1) * Math.cos(lat2) * sinDlon ** 2)
+        );
+        return R * c;
+      };
+
+      const calculateTotalDistance = (route: any[]) => {
+        let total = 0;
+        for (let i = 0; i < route.length - 1; i++) {
+          total += haversine(route[i].coordinates, route[i + 1].coordinates);
         }
+        return total;
+      };
+
+      // Nearest Neighbor para rota inicial
+      const nearestNeighbor = (stops: any[], startPoint: any) => {
+        if (stops.length === 0) return [];
+        if (stops.length === 1) return stops;
+        
+        const result: any[] = [];
+        const remaining = [...stops];
+        let current = startPoint;
+        
+        while (remaining.length > 0) {
+          let bestIdx = 0;
+          let bestDist = Infinity;
+          
+          for (let i = 0; i < remaining.length; i++) {
+            const dist = haversine(current.coordinates, remaining[i].coordinates);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestIdx = i;
+            }
+          }
+          
+          const next = remaining.splice(bestIdx, 1)[0];
+          result.push(next);
+          current = next;
+        }
+        
+        return result;
+      };
+
+      // 2-opt optimization (melhora a rota removendo cruzamentos)
+      const twoOpt = (route: any[], maxIterations = 100) => {
+        let improved = true;
+        let iterations = 0;
+        let bestRoute = [...route];
+        let bestDistance = calculateTotalDistance(bestRoute);
+
+        while (improved && iterations < maxIterations) {
+          improved = false;
+          iterations++;
+
+          for (let i = 1; i < bestRoute.length - 2; i++) {
+            for (let j = i + 1; j < bestRoute.length - 1; j++) {
+              // Testa reversão do segmento [i, j]
+              const newRoute = [
+                ...bestRoute.slice(0, i),
+                ...bestRoute.slice(i, j + 1).reverse(),
+                ...bestRoute.slice(j + 1)
+              ];
+
+              const newDistance = calculateTotalDistance(newRoute);
+
+              if (newDistance < bestDistance) {
+                bestRoute = newRoute;
+                bestDistance = newDistance;
+                improved = true;
+              }
+            }
+          }
+        }
+
+        console.log(`✨ 2-opt convergiu em ${iterations} iterações`);
+        return bestRoute;
+      };
+
+      // 🔧 Monta a rota
+      const origin = deliveries[0];
+      const destination = fixDestinationAtEnd ? deliveries[deliveries.length - 1] : null;
+      const idMap = new Map(deliveries.map((d: any) => [d.id, d]));
+
+      const finalRoute: any[] = [origin];
+      const used = new Set([origin.id]);
+
+      // Adiciona entrega urgente logo após origem
+      if (urgentDeliveryId && idMap.has(urgentDeliveryId)) {
+        const urgent = idMap.get(urgentDeliveryId);
+        finalRoute.push(urgent);
+        used.add(urgent.id);
+      }
+
+      // Filtra pontos intermediários
+      const intermediate = deliveries.filter(
+        (d: any) => !used.has(d.id) && (!destination || d.id !== destination.id)
+      );
+
+      // Otimiza pontos intermediários
+      const lastPoint = finalRoute[finalRoute.length - 1];
+      const optimizedIntermediate = nearestNeighbor(intermediate, lastPoint);
+      
+      // Aplica 2-opt para melhorar ainda mais
+      const routeForOptimization = [...finalRoute, ...optimizedIntermediate];
+      const finalOptimized = twoOpt(routeForOptimization);
+
+      // Remove origem da otimização e readiciona
+      const withoutOrigin = finalOptimized.slice(1);
+      const finalRouteComplete = [origin, ...withoutOrigin];
+
+      // Adiciona destino se necessário
+      if (destination) finalRouteComplete.push(destination);
+
+      const optimizedOrder = finalRouteComplete.map((d) => d.id);
+      const totalDistance = calculateTotalDistance(finalRouteComplete);
+
+      console.log(`✅ Rota otimizada: ${totalDistance.toFixed(2)} km`);
+      
+      return new Response(
+        JSON.stringify({ 
+          optimizedOrder, 
+          totalDistance: Math.round(totalDistance * 100) / 100 
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // 🔹 Obtém a chave da API do Gemini das variáveis de ambiente
-    const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+    // 🤖 Fallback pro Gemini AI
+    console.log("⚙️ Coordenadas ausentes → roteirizando via Gemini AI");
+
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     if (!GEMINI_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: 'GEMINI_API_KEY not configured' }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
+      throw new Error("GEMINI_API_KEY not configured");
     }
 
-    const GEMINI_MODEL = 'gemini-1.5-flash';
+    const GEMINI_MODEL = "gemini-1.5-flash";
+    const prompt = `
+Você é um especialista em logística. Analise as seguintes entregas e retorne a ordem ideal (otimizada).
+Dados:
+${deliveries
+  .map(
+    (d: any, i: number) =>
+      `${i + 1}. ID: ${d.id} | Endereço: ${d.address} | Tipo: ${d.type} ${
+        d.isUrgent ? "(URGENTE)" : ""
+      }`
+  )
+  .join("\n")}
 
-    // ✅ Correção: Encontra a origem e o destino pelo seu tipo, não pela posição.
-    const origin = deliveries.find((d: any) => d.type === 'origin');
-    const destination = deliveries.find((d: any) => d.type === 'destination');
-
-    const urgentDelivery = deliveries.find((d: any) => d.is_urgent);
-
-    if (urgentDelivery) {
-      console.log(`✅ Entrega Urgente Identificada: ID ${urgentDelivery.id}`);
+Regras:
+1. A origem deve ser a primeira parada.
+2. ${
+      urgentDeliveryId
+        ? `A entrega URGENTE (ID: ${urgentDeliveryId}) deve ser a segunda parada.`
+        : "Não há entregas urgentes."
+    }
+3. ${
+      fixDestinationAtEnd
+        ? "O destino final deve ser a última parada."
+        : "A última entrega pode ser reordenada."
     }
 
-    // 🔹 Criação do Prompt para o Gemini
-    const prompt = `Você é um especialista em otimização de rotas de entrega.
-Analise as seguintes paradas de entrega e sugira a ordem ideal para visitá-las, minimizando a distância total percorrida.
+Saída esperada:
+{"optimizedOrder": ["id_1", "id_2", "id_3", ...]}
+`;
 
-Entregas (Paradas):
-${deliveries.map((d: any, i: number) =>
-  `${i + 1}. ID: ${d.id} | Endereço: ${d.address} | Tipo: ${d.type} ${d.isUrgent ? '(URGENTE)' : ''} | Coordenadas: ${d.coordinates ? d.coordinates.join(', ') : 'não disponível'}`
-).join('\n')}
-
-REGRAS DE ORDENAÇÃO:
-1. A entrega do tipo "Origem" (${origin ? origin.address : 'não especificada'}) DEVE ser sempre a primeira parada na sua ordem otimizada.
-2. ${urgentDelivery
-    ? `A entrega URGENTE (ID: ${urgentDelivery.id}) deve ser a segunda parada, logo após a ORIGEM (regra 1).`
-    : 'Não há entregas urgentes.'}
-3. ${fixDestinationAtEnd
-    ? `A última entrega na lista de entrada (${destination ? destination.address : 'o destino final'}) DEVE ser sempre a última parada na sua ordem otimizada.`
-    : 'O destino final pode ser reorganizado se isso otimizar a rota.'}
-4. Reorganize as paradas restantes (que não são origem, urgente ou destino final) com base na proximidade das coordenadas fornecidas para otimizar o percurso.
-5. Otimize o percurso entre os pontos fixos. Se não houver destino final fixo, otimize todas as paradas após os pontos fixos iniciais (origem e, se houver, a parada urgente). Se houver um destino final fixo, otimize apenas as paradas que estão entre os pontos fixos iniciais e o destino final.
-
-SAÍDA OBRIGATÓRIA:
-- Retorne APENAS um objeto JSON.
-- O JSON deve conter um array chamado "optimizedOrder" com TODOS os IDs das entregas na ordem otimizada.
-
-Exemplo de formato de resposta: {"optimizedOrder": ["${origin?.id}", "id_urgente", "id_3", "id_4", ..., "${destination?.id}"]}`;
-
-    console.log('Sending request to Gemini API...');
-
-    // 🔹 Chamada à API do Gemini
-    const response = await fetch(
+    const aiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [
-            { role: 'user', parts: [{ text: prompt }] }
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-          },
-          systemInstruction: {
-            parts: [{
-              text: 'Você é um especialista em otimização de rotas. Sua única saída é um objeto JSON que segue estritamente a estrutura solicitada. NUNCA inclua texto ou explicações fora do JSON.'
-            }]
-          }
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
         }),
       }
     );
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('Gemini API error:', response.status, errorData);
+    const data = await aiResponse.json();
+    const aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
 
-      let errorMessage = `Erro na API do Gemini: ${response.statusText}`;
-      if (errorData?.error?.message) {
-        errorMessage = `Erro Gemini: ${errorData.error.message}`;
-      }
-
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log('AI response received:', data);
-
-    const aiResponseContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!aiResponseContent) {
-      throw new Error('Resposta da IA vazia ou malformada.');
-    }
-
-    // 🔹 Parse da resposta do Gemini
-    let optimizedOrder: string[];
+    let optimizedOrder = deliveries.map((d: any) => d.id);
     try {
-      const parsed = JSON.parse(aiResponseContent);
-      optimizedOrder = parsed.optimizedOrder;
-
-      if (!Array.isArray(optimizedOrder)) {
-        throw new Error("JSON retornado não contém o array 'optimizedOrder'.");
+      const parsed = JSON.parse(aiText);
+      if (Array.isArray(parsed.optimizedOrder)) {
+        optimizedOrder = parsed.optimizedOrder;
       }
-    } catch (parseError) {
-      console.error('Error parsing AI response:', parseError);
-      console.log('Raw AI response:', aiResponseContent);
-      
-      // Fallback: retorna ordem original
-      optimizedOrder = deliveries.map((d: any) => d.id);
+    } catch {
+      console.warn("⚠️ Resposta Gemini inválida. Usando ordem original.");
     }
 
-    console.log('Optimized order:', optimizedOrder);
-
-    return new Response(
-      JSON.stringify({ optimizedOrder }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
-
+    console.log("✅ Rota otimizada via Gemini.");
+    return new Response(JSON.stringify({ optimizedOrder }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (error: any) {
-    console.error('Error in optimize-route function:', error);
+    console.error("❌ Erro fatal em optimize-route:", error);
     return new Response(
-      JSON.stringify({
-        error: error.message || 'Unknown error',
-        details: error.stack
-      }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      JSON.stringify({ error: error.message || "Unknown error", stack: error.stack }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
