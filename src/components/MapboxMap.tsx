@@ -1,42 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Delivery } from '@/types/delivery';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 
 interface MapboxMapProps {
     deliveries: Delivery[];
     route?: any;
 }
 
+const MAPBOX_TOKEN = 'pk.eyJ1IjoibG1hcmNlbG9jOTAiLCJhIjoiY21oM282NnIyMDgyZzJtcTNkOG9iMGJldiJ9.4O8qUWmhCCDxYajqL6L8dQ';
+
 export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
     const mapContainer = useRef<HTMLDivElement>(null);
     const map = useRef<mapboxgl.Map | null>(null);
     const markersRef = useRef<mapboxgl.Marker[]>([]);
-    const [mapboxToken, setMapboxToken] = useState(localStorage.getItem('mapboxPublicToken') || '');
-    const [tokenInput, setTokenInput] = useState('');
-    const [isTokenSet, setIsTokenSet] = useState(!!localStorage.getItem('mapboxPublicToken'));
-
-    const handleSaveToken = () => {
-        if (!tokenInput.trim()) return;
-        localStorage.setItem('mapboxPublicToken', tokenInput.trim());
-        setMapboxToken(tokenInput.trim());
-        setIsTokenSet(true);
-    };
 
     // Initialize map
     useEffect(() => {
-        if (!mapContainer.current || map.current || !isTokenSet || !mapboxToken) return;
+        if (!mapContainer.current || map.current) return;
 
-        mapboxgl.accessToken = mapboxToken;
+        mapboxgl.accessToken = MAPBOX_TOKEN;
 
         map.current = new mapboxgl.Map({
             container: mapContainer.current,
-            style: 'mapbox://styles/mapbox/dark-v11',
+            style: 'mapbox://styles/mapbox/light-v11',
             center: [-46.633308, -23.550520],
-            zoom: 12,
+            zoom: 11,
         });
 
         map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
@@ -45,7 +34,7 @@ export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
             map.current?.remove();
             map.current = null;
         };
-    }, [isTokenSet, mapboxToken]);
+    }, []);
 
     // Update markers
     useEffect(() => {
@@ -172,34 +161,7 @@ export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
 
     return (
         <div className="w-full h-full relative">
-            {!isTokenSet ? (
-                <Card className="absolute inset-0 flex items-center justify-center p-6 z-10 bg-background/95">
-                    <div className="max-w-md w-full space-y-4">
-                        <div className="space-y-2 text-center">
-                            <h3 className="text-lg font-semibold">Token Público Mapbox Necessário</h3>
-                            <p className="text-sm text-muted-foreground">
-                                Para exibir o mapa, você precisa fornecer um token público do Mapbox (começa com "pk.").
-                                Obtenha seu token em: <a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer" className="text-primary underline">mapbox.com</a>
-                            </p>
-                        </div>
-                        <div className="flex gap-2">
-                            <Input
-                                type="text"
-                                placeholder="pk.ey..."
-                                value={tokenInput}
-                                onChange={(e) => setTokenInput(e.target.value)}
-                                className="flex-1"
-                            />
-                            <Button onClick={handleSaveToken}>Salvar</Button>
-                        </div>
-                    </div>
-                </Card>
-            ) : (
-                <div className="w-full h-[calc(100vh-80px)] relative">
-                    <div ref={mapContainer} className="absolute inset-0" />
-                </div>
-
-            )}
+            <div ref={mapContainer} className="absolute inset-0" />
         </div>
     );
 };

@@ -30,7 +30,7 @@ const mapSupabaseToDelivery = (supabaseDelivery: SupabaseDelivery): Delivery => 
     try {
       const parsed = JSON.parse(coordinates);
       if (Array.isArray(parsed) && parsed.length === 2) parsedCoords = [parsed[0], parsed[1]];
-    } catch {}
+    } catch { }
   } else if (typeof coordinates === "object" && coordinates !== null) {
     const lat = (coordinates as any).lat ?? (coordinates as any).latitude;
     const lng = (coordinates as any).lng ?? (coordinates as any).lon ?? (coordinates as any).longitude;
@@ -125,47 +125,84 @@ const Index = () => {
 
   const handleOptimizeRoute = async () => {
     if (deliveries.length < 2) {
-      toast.error("Adicione pelo menos 2 entregas para otimizar a rota.");
-      return;
-    }
-
-    const origin = deliveries.find(d => d.type === "origin");
-    const stops = deliveries.filter(d => d.type === "stop");
-    const destination = deliveries.find(d => d.type === "destination");
-
-    if (!origin) {
-      toast.error("É necessário definir uma origem antes de otimizar a rota.");
+      toast.error('Adicione pelo menos 2 entregas para otimizar a rota');
       return;
     }
 
     setIsOptimizing(true);
-    setOptimizationResult(null);
 
     try {
-      const ordered = [origin, ...stops, ...(destination ? [destination] : [])];
-      const { data, error } = await supabase.functions.invoke("optimize-route", {
-        body: { deliveries: ordered, fixDestinationAtEnd: !!destination },
+      console.log('🚚 Entregas para otimização:', deliveries);
+
+      // 🔥 FIX: Chama a Edge Function
+      const { data, error } = await supabase.functions.invoke('optimize-route', {
+        body: {
+          deliveries: deliveries.map(d => ({
+            id: d.id,
+            address: d.address,
+            coordinates: d.coordinates,
+            type: d.type,
+            isUrgent: d.isUrgent || d.is_urgent,
+          })),
+          profile: 'driving-traffic', // 🔥 FIX: removido selectedProfile não definido
+        },
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Erro ao otimizar:', error);
+        throw error;
+      }
 
-      const { optimizedOrder, totalDistance, totalDuration, routeGeometry } = data;
+      if (!data || !data.optimizedOrder) {
+        throw new Error('Resposta inválida da API de otimização');
+      }
 
-      const optimizedDeliveries = optimizedOrder
-        .map((id: string) => ordered.find(d => d.id === id))
-        .filter(Boolean) as Delivery[];
+      console.log('✅ Resposta da otimização:', data);
+      console.log('📋 IDs retornados:', data.optimizedOrder);
 
-      setDeliveries(optimizedDeliveries);
+      // 🔥 FIX: Cria um Map para lookup rápido por ID
+      const deliveryMap = new Map(deliveries.map(d => [d.id, d]));
+      console.log('📦 IDs disponíveis:', Array.from(deliveryMap.keys()));
 
+      // 🔥 FIX: Reconstrói o array na ordem otimizada
+      const reorderedDeliveries = data.optimizedOrder
+        .map((id: string) => {
+          const delivery = deliveryMap.get(id);
+          if (!delivery) {
+            console.error(`❌ Delivery não encontrada para ID: ${id}`);
+          }
+          return delivery;
+        })
+        .filter((d): d is Delivery => d !== undefined);
+
+      console.log('📦 Entregas reordenadas:', reorderedDeliveries);
+      console.log('📦 Quantidade antes:', deliveries.length, 'depois:', reorderedDeliveries.length);
+
+      // Verifica se todas as entregas foram mapeadas
+      if (reorderedDeliveries.length !== deliveries.length) {
+        console.warn('⚠️ Algumas entregas não foram mapeadas corretamente');
+        throw new Error('Erro ao mapear entregas otimizadas');
+      }
+
+      // 🔥 FIX: Atualiza o estado (NÃO usa sortDeliveries, mantém ordem otimizada)
+      setDeliveries(reorderedDeliveries);
+      
+      // 🔥 FIX: setOptimizedRoute → setOptimizationResult
       setOptimizationResult({
-        totalDistance: totalDistance || 0,
-        totalDuration: totalDuration || 0,
-        routeGeometry: routeGeometry,
+        totalDistance: data.totalDistance,
+        totalDuration: data.totalDuration,
+        routeGeometry: data.routeGeometry,
       });
 
-      toast.success("Rota otimizada com sucesso!");
+      toast.success('Rota otimizada com sucesso!', {
+        description: `${(data.totalDistance / 1000).toFixed(1)} km • ${Math.round(data.totalDuration / 60)} min`,
+      });
+
     } catch (error: any) {
-      toast.error("Falha ao otimizar a rota.", { description: error.message });
+      console.error('❌ Erro ao otimizar rota:', error);
+      toast.error('Falha ao otimizar rota', {
+        description: error.message || 'Erro desconhecido',
+      });
     } finally {
       setIsOptimizing(false);
     }
@@ -173,9 +210,12 @@ const Index = () => {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-gray-900">
-        {/* Sidebar fixa à esquerda */}
-        <Sidebar className="flex flex-col justify-between h-full overflow-y-auto">
+      <div className="relative h-screen w-full">
+        <main className="absolute inset-0">
+          <MapboxMap deliveries={deliveries} route={optimizationResult} />
+        </main>
+
+        <Sidebar className="absolute top-0 left-0 h-full w-1/4 z-10 flex flex-col justify-between overflow-y-auto">
           <div className="p-4 space-y-4">
             <AddDeliveryForm onAdd={handleAddDelivery} />
 
@@ -221,13 +261,6 @@ const Index = () => {
             />
           </div>
         </Sidebar>
-
-        {/* Mapa principal com altura garantida */}
-        <main className="flex-1 relative">
-          <div className="absolute inset-0">
-            <MapboxMap deliveries={deliveries} route={optimizationResult} />
-          </div>
-        </main>
 
         {editingDelivery && (
           <EditDeliveryDialog

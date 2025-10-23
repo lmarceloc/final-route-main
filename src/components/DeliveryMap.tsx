@@ -216,8 +216,7 @@ export const DeliveryMap = ({ deliveries }: DeliveryMapProps) => {
       width: '100%',
       height: '100%',
       minHeight: '500px',
-      position: 'relative',
-      zIndex: 1,
+      position: 'absolute'
     }}
   />
 );
