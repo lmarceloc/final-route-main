@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { SidebarProvider, Sidebar } from "@/components/ui/sidebar";
 import { AddDeliveryForm } from "@/components/AddDeliveryForm";
 import { DeliveryList } from "@/components/DeliveryList";
-import { DeliveryMap } from "@/components/DeliveryMap";
+import { MapboxMap } from "@/components/MapboxMap";
 import EditDeliveryDialog from "@/components/EditDeliveryDialog";
 import { Delivery } from "@/types/delivery";
 import { supabase } from "@/integrations/supabase/client";
@@ -13,34 +13,28 @@ import { toast } from "sonner";
 import { Database } from "@/integrations/supabase/types";
 
 interface RouteSummary {
-  stops: number;
-  distance: number;
-  city: string;
+  totalDistance: number;
+  totalDuration: number;
+  routeGeometry?: any;
 }
 
-type SupabaseDelivery = Database['public']['Tables']['deliveries']['Row'];
+type SupabaseDelivery = Database["public"]["Tables"]["deliveries"]["Row"];
 
 const mapSupabaseToDelivery = (supabaseDelivery: SupabaseDelivery): Delivery => {
   const { coordinates, ...rest } = supabaseDelivery;
   let parsedCoords: [number, number] | undefined = undefined;
 
-  if (Array.isArray(coordinates) && coordinates.length === 2 && typeof coordinates[0] === "number" && typeof coordinates[1] === "number") {
+  if (Array.isArray(coordinates) && coordinates.length === 2) {
     parsedCoords = [coordinates[0], coordinates[1]];
   } else if (typeof coordinates === "string") {
     try {
       const parsed = JSON.parse(coordinates);
-      if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === "number" && typeof parsed[1] === "number") {
-        parsedCoords = [parsed[0], parsed[1]];
-      }
-    } catch {
-      // ignora
-    }
+      if (Array.isArray(parsed) && parsed.length === 2) parsedCoords = [parsed[0], parsed[1]];
+    } catch {}
   } else if (typeof coordinates === "object" && coordinates !== null) {
     const lat = (coordinates as any).lat ?? (coordinates as any).latitude;
     const lng = (coordinates as any).lng ?? (coordinates as any).lon ?? (coordinates as any).longitude;
-    if (typeof lat === "number" && typeof lng === "number") {
-      parsedCoords = [lat, lng];
-    }
+    if (typeof lat === "number" && typeof lng === "number") parsedCoords = [lat, lng];
   }
 
   return {
@@ -50,19 +44,17 @@ const mapSupabaseToDelivery = (supabaseDelivery: SupabaseDelivery): Delivery => 
   };
 };
 
-const sortDeliveries = (list: Delivery[]) => {
-  return [
-    ...list.filter(d => d.type === "origin"),
-    ...list.filter(d => d.isUrgent && d.type !== "origin" && d.type !== "destination"),
-    ...list.filter(d => !d.isUrgent && d.type === "stop"),
-    ...list.filter(d => d.type === "destination"),
-  ];
-};
+const sortDeliveries = (list: Delivery[]) => [
+  ...list.filter(d => d.type === "origin"),
+  ...list.filter(d => d.isUrgent && d.type !== "origin" && d.type !== "destination"),
+  ...list.filter(d => !d.isUrgent && d.type === "stop"),
+  ...list.filter(d => d.type === "destination"),
+];
 
 const Index = () => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null);
-  const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
+  const [optimizationResult, setOptimizationResult] = useState<RouteSummary | null>(null);
   const [isOptimizing, setIsOptimizing] = useState(false);
 
   useEffect(() => {
@@ -72,19 +64,14 @@ const Index = () => {
         console.error("Error fetching deliveries:", error);
       } else {
         const mappedData = (data || []).map(mapSupabaseToDelivery);
-        const ordered = sortDeliveries(mappedData);
-        setDeliveries(ordered);
+        setDeliveries(sortDeliveries(mappedData));
       }
     };
     fetchDeliveries();
   }, []);
 
-  useEffect(() => {
-    setDeliveries(prev => sortDeliveries([...prev]));
-  }, [deliveries.length]);
-
   const handleAddDelivery = async (
-    deliveryOrDeliveries: Omit<Delivery, "id" | "priority"> | Omit<Delivery, "id" | "priority">[],
+    deliveryOrDeliveries: Omit<Delivery, "id" | "priority"> | Omit<Delivery, "id" | "priority">[]
   ) => {
     const newDeliveries = Array.isArray(deliveryOrDeliveries)
       ? deliveryOrDeliveries
@@ -125,11 +112,7 @@ const Index = () => {
 
   const handleRemove = async (id: string) => {
     const { error } = await supabase.from("deliveries").delete().eq("id", id);
-    if (error) {
-      console.error("Error deleting delivery:", error);
-    } else {
-      setDeliveries(prev => sortDeliveries(prev.filter(d => d.id !== id)));
-    }
+    if (!error) setDeliveries(prev => sortDeliveries(prev.filter(d => d.id !== id)));
   };
 
   const handleReorder = (result: DropResult) => {
@@ -156,7 +139,7 @@ const Index = () => {
     }
 
     setIsOptimizing(true);
-    setRouteSummary(null);
+    setOptimizationResult(null);
 
     try {
       const ordered = [origin, ...stops, ...(destination ? [destination] : [])];
@@ -166,30 +149,23 @@ const Index = () => {
 
       if (error) throw error;
 
-      const { optimizedOrder, totalDistance } = data;
+      const { optimizedOrder, totalDistance, totalDuration, routeGeometry } = data;
+
       const optimizedDeliveries = optimizedOrder
         .map((id: string) => ordered.find(d => d.id === id))
         .filter(Boolean) as Delivery[];
 
-      const finalOrder = [
-        origin,
-        ...optimizedDeliveries.filter(d => d.id !== origin.id && d.id !== destination?.id),
-        ...(destination ? [destination] : []),
-      ];
+      setDeliveries(optimizedDeliveries);
 
-      setDeliveries(sortDeliveries(finalOrder));
-      setRouteSummary({
-        stops: finalOrder.length,
-        distance: totalDistance || 0,
-        city: "Rotas",
+      setOptimizationResult({
+        totalDistance: totalDistance || 0,
+        totalDuration: totalDuration || 0,
+        routeGeometry: routeGeometry,
       });
 
       toast.success("Rota otimizada com sucesso!");
     } catch (error: any) {
-      console.error("❌ Error optimizing route:", error);
-      toast.error("Falha ao otimizar a rota.", {
-        description: error.message || "Erro desconhecido",
-      });
+      toast.error("Falha ao otimizar a rota.", { description: error.message });
     } finally {
       setIsOptimizing(false);
     }
@@ -197,16 +173,16 @@ const Index = () => {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="flex h-screen bg-gray-100 dark:bg-gray-900">
-        <Sidebar className="flex flex-col justify-between">
-          {/* 🔹 Parte superior fixa */}
+      <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-gray-900">
+        {/* Sidebar fixa à esquerda */}
+        <Sidebar className="flex flex-col justify-between h-full overflow-y-auto">
           <div className="p-4 space-y-4">
             <AddDeliveryForm onAdd={handleAddDelivery} />
 
             <Button
               onClick={handleOptimizeRoute}
               disabled={isOptimizing || deliveries.length < 2}
-              className="w-full bg-green-600 text-white hover:bg-green-700 sticky top-0 z-10"
+              className="w-full bg-green-600 text-white hover:bg-green-700"
             >
               {isOptimizing ? (
                 <>
@@ -221,19 +197,21 @@ const Index = () => {
               )}
             </Button>
 
-            {routeSummary && (
+            {optimizationResult && optimizationResult.totalDistance > 0 && (
               <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
                 <p className="text-sm font-medium text-green-900 dark:text-green-100">
                   🤖 Rota Otimizada ✅
                 </p>
                 <p className="text-xs text-green-700 dark:text-green-300 mt-1">
-                  {routeSummary.stops} paradas • {routeSummary.distance?.toFixed(3)} km
+                  Distância: {(optimizationResult.totalDistance / 1000).toFixed(2)} km
+                </p>
+                <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                  Duração: {Math.round(optimizationResult.totalDuration / 60)} min
                 </p>
               </div>
             )}
           </div>
 
-          {/* 🔹 Lista de entregas com scroll */}
           <div className="flex-1 overflow-y-auto px-4 pb-20">
             <DeliveryList
               deliveries={deliveries}
@@ -244,9 +222,11 @@ const Index = () => {
           </div>
         </Sidebar>
 
-        {/* 🔹 Mapa principal */}
-        <main className="flex-1">
-          <DeliveryMap key={JSON.stringify(deliveries.map(d => d.id))} deliveries={deliveries} />
+        {/* Mapa principal com altura garantida */}
+        <main className="flex-1 relative">
+          <div className="absolute inset-0">
+            <MapboxMap deliveries={deliveries} route={optimizationResult} />
+          </div>
         </main>
 
         {editingDelivery && (

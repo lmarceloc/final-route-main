@@ -209,20 +209,17 @@ export const DeliveryMap = ({ deliveries }: DeliveryMapProps) => {
 
   }, [deliveries]);
 
-  return (
-    <div
-      ref={mapRef}
-      style={{
-        height: '850px',
-        width: '70%',
-        overflow: 'hidden',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '500px',
-        position: 'absolute',
-        zIndex: 0
-      }}
-    />
-  );
+ return (
+  <div
+    ref={mapRef}
+    style={{
+      width: '100%',
+      height: '100%',
+      minHeight: '500px',
+      position: 'relative',
+      zIndex: 1,
+    }}
+  />
+);
+
 };
