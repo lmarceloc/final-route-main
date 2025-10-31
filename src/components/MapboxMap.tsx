@@ -8,7 +8,7 @@ interface MapboxMapProps {
     route?: any;
 }
 
-const MAPBOX_TOKEN = 'pk.eyJ1IjoibG1hcmNlbG9jOTAiLCJhIjoiY21oM282NnIyMDgyZzJtcTNkOG9iMGJldiJ9.4O8qUWmhCCDxYajqL6L8dQ';
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
 export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
     const mapContainer = useRef<HTMLDivElement>(null);
@@ -18,6 +18,10 @@ export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
     // Initialize map
     useEffect(() => {
         if (!mapContainer.current || map.current) return;
+        if (!MAPBOX_TOKEN) {
+            console.error('Mapbox token ausente. Defina VITE_MAPBOX_TOKEN no ambiente.');
+            return;
+        }
 
         mapboxgl.accessToken = MAPBOX_TOKEN;
 
