@@ -5,9 +5,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card } from '@/components/ui/card';
-import { Plus, Upload, Loader2 } from 'lucide-react';
+import { Plus, Loader2 } from 'lucide-react';
 import { Delivery } from '@/types/delivery';
-import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { geocodeAddress } from '@/components/geocode';
 
@@ -22,7 +21,6 @@ export const AddDeliveryForm = ({ onAdd }: AddDeliveryFormProps) => {
   const [type, setType] = useState<Delivery['type']>('stop');
   const [isUrgent, setIsUrgent] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
-  const [isProcessingInvoice, setIsProcessingInvoice] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,91 +58,10 @@ export const AddDeliveryForm = ({ onAdd }: AddDeliveryFormProps) => {
     setIsUrgent(false);
   };
 
-  const handleInvoiceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-  const files = event.target.files;
-  if (!files || files.length === 0) return;
-
-  try {
-    const xmlFiles = await Promise.all(
-      Array.from(files).map(async file => ({
-        name: file.name,
-        fileData: await file.text(),
-        fileType: "xml"
-      }))
-    );
-
-    const { data, error } = await supabase.functions.invoke("process-invoice", {
-      body: { files: xmlFiles }
-    });
-
-    if (error || data?.error) {
-      toast.error("Erro ao processar nota fiscal", { description: error?.message || data?.error });
-      return;
-    }
-
-    if (data.sameOrigin && data.origin && data.destinations.length > 0) {
-      const deliveriesToAdd = [
-        { type: "origin", address: data.origin.address },
-        ...data.destinations.map((d: any) => ({
-          type: "stop",
-          address: d.address,
-        })),
-      ];
-      onAdd(deliveriesToAdd);
-      toast.success(`Foram adicionadas ${data.destinations.length} entregas com origem única.`);
-    } else {
-      toast.error("Não foi possível identificar origem única entre as notas.");
-    }
-  } catch (err: any) {
-    console.error("Erro geral ao processar NFs:", err);
-    toast.error("Erro ao processar notas fiscais", { description: err.message });
-  }
-};
-
-
     return (
       <Card className="p-4">
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Upload de Nota Fiscal */}
-          <div className="space-y-2 pb-4 border-b border-border">
-            <Label htmlFor="invoice" className="text-sm font-medium">
-              Nota Fiscal (opcional)
-            </Label>
-            <div className="flex items-center gap-2">
-              <Input
-                id="invoice"
-                type="file"
-                accept=".pdf,.xml,image/*"
-                onChange={handleInvoiceUpload}
-                disabled={isProcessingInvoice}
-                className="hidden"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => document.getElementById('invoice')?.click()}
-                disabled={isProcessingInvoice}
-                className="w-full"
-              >
-                {isProcessingInvoice ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processando nota fiscal...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload NF (extrai origem e destino)
-                  </>
-                )}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Envie uma nota fiscal ( XML ) para extrair origem e destino automaticamente
-            </p>
-          </div>
-
-          <div className="space-y-2 pt-4 border-t border-border">
+          <div className="space-y-2">
             <Label htmlFor="address">Endereço Completo</Label>
             <Input
               id="address"

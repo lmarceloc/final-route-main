@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { SidebarProvider, Sidebar } from "@/components/ui/sidebar";
+import { SidebarProvider, Sidebar, SidebarInset } from "@/components/ui/sidebar";
 import { AddDeliveryForm } from "@/components/AddDeliveryForm";
 import { DeliveryList } from "@/components/DeliveryList";
 import { MapboxMap } from "@/components/MapboxMap";
@@ -77,7 +77,34 @@ const Index = () => {
       ? deliveryOrDeliveries
       : [deliveryOrDeliveries];
 
-    const deliveriesToInsert = newDeliveries.map(d => ({
+    let hasOrigin = deliveries.some(d => d.type === "origin");
+    let hasDestination = deliveries.some(d => d.type === "destination");
+
+    const filteredDeliveries = newDeliveries.filter(d => {
+      if (d.type === "origin") {
+        if (hasOrigin) {
+          toast.error("Já existe uma origem cadastrada. Remova a atual antes de adicionar outra.");
+          return false;
+        }
+        hasOrigin = true;
+      }
+
+      if (d.type === "destination") {
+        if (hasDestination) {
+          toast.error("Já existe um destino final cadastrado. Remova o atual antes de adicionar outro.");
+          return false;
+        }
+        hasDestination = true;
+      }
+
+      return true;
+    });
+
+    if (filteredDeliveries.length === 0) {
+      return;
+    }
+
+    const deliveriesToInsert = filteredDeliveries.map(d => ({
       address: d.address,
       coordinates: d.coordinates,
       type: d.type,
@@ -129,22 +156,53 @@ const Index = () => {
       return;
     }
 
+    const origins = deliveries.filter(d => d.type === "origin");
+    const destinations = deliveries.filter(d => d.type === "destination");
+
+    if (origins.length === 0) {
+      toast.error("Cadastre uma origem antes de otimizar a rota.");
+      return;
+    }
+
+    if (destinations.length === 0) {
+      toast.error("Cadastre um destino final antes de otimizar a rota.");
+      return;
+    }
+
+    const primaryOriginId = origins[0].id;
+    const primaryDestinationId = destinations[destinations.length - 1].id;
+
+    if (origins.length > 1 || destinations.length > 1) {
+      toast.warning("Somente a primeira origem e o primeiro destino serão considerados; os demais foram tratados como paradas.");
+    }
+
+    const normalizedDeliveries = deliveries.map(delivery => {
+      if (delivery.type === "origin" && delivery.id !== primaryOriginId) {
+        return { ...delivery, type: "stop" as Delivery["type"] };
+      }
+
+      if (delivery.type === "destination" && delivery.id !== primaryDestinationId) {
+        return { ...delivery, type: "stop" as Delivery["type"] };
+      }
+
+      return delivery;
+    });
+
     setIsOptimizing(true);
 
     try {
       console.log('🚚 Entregas para otimização:', deliveries);
 
-      // 🔥 FIX: Chama a Edge Function
       const { data, error } = await supabase.functions.invoke('optimize-route', {
         body: {
-          deliveries: deliveries.map(d => ({
+          deliveries: normalizedDeliveries.map(d => ({
             id: d.id,
             address: d.address,
             coordinates: d.coordinates,
             type: d.type,
             isUrgent: d.isUrgent || d.is_urgent,
           })),
-          profile: 'driving-traffic', // 🔥 FIX: removido selectedProfile não definido
+          profile: 'driving-traffic',
         },
       });
 
@@ -160,16 +218,14 @@ const Index = () => {
       console.log('✅ Resposta da otimização:', data);
       console.log('📋 IDs retornados:', data.optimizedOrder);
 
-      // 🔥 FIX: Cria um Map para lookup rápido por ID
       const deliveryMap = new Map(deliveries.map(d => [d.id, d]));
       console.log('📦 IDs disponíveis:', Array.from(deliveryMap.keys()));
 
-      // 🔥 FIX: Reconstrói o array na ordem otimizada
       const reorderedDeliveries = data.optimizedOrder
         .map((id: string) => {
           const delivery = deliveryMap.get(id);
           if (!delivery) {
-            console.error(`❌ Delivery não encontrada para ID: ${id}`);
+            console.error(`⚠️ Delivery não encontrada para ID: ${id}`);
           }
           return delivery;
         })
@@ -178,16 +234,18 @@ const Index = () => {
       console.log('📦 Entregas reordenadas:', reorderedDeliveries);
       console.log('📦 Quantidade antes:', deliveries.length, 'depois:', reorderedDeliveries.length);
 
-      // Verifica se todas as entregas foram mapeadas
-      if (reorderedDeliveries.length !== deliveries.length) {
-        console.warn('⚠️ Algumas entregas não foram mapeadas corretamente');
-        throw new Error('Erro ao mapear entregas otimizadas');
+      const optimizedIdSet = new Set<string>(data.optimizedOrder);
+      const missingDeliveries = deliveries.filter(d => !optimizedIdSet.has(d.id));
+
+      if (missingDeliveries.length > 0) {
+        console.warn('⚠️ Entregas fora da resposta da otimização:', missingDeliveries.map(d => d.id));
+        toast.warning('Algumas entregas não puderam ser incluídas na rota otimizada.');
       }
 
-      // 🔥 FIX: Atualiza o estado (NÃO usa sortDeliveries, mantém ordem otimizada)
-      setDeliveries(reorderedDeliveries);
-      
-      // 🔥 FIX: setOptimizedRoute → setOptimizationResult
+      const finalDeliveries = [...reorderedDeliveries, ...missingDeliveries];
+
+      setDeliveries(finalDeliveries);
+
       setOptimizationResult({
         totalDistance: data.totalDistance,
         totalDuration: data.totalDuration,
@@ -195,7 +253,7 @@ const Index = () => {
       });
 
       toast.success('Rota otimizada com sucesso!', {
-        description: `${(data.totalDistance / 1000).toFixed(1)} km • ${Math.round(data.totalDuration / 60)} min`,
+        description: `${(data.totalDistance / 1000).toFixed(1)} km · ${Math.round(data.totalDuration / 60)} min`,
       });
 
     } catch (error: any) {
@@ -210,57 +268,64 @@ const Index = () => {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="relative h-screen w-full">
-        <main className="absolute inset-0">
-          <MapboxMap deliveries={deliveries} route={optimizationResult} />
-        </main>
-
-        <Sidebar className="absolute top-0 left-0 h-full w-1/4 z-10 flex flex-col justify-between overflow-y-auto">
-          <div className="p-4 space-y-4">
-            <AddDeliveryForm onAdd={handleAddDelivery} />
-
-            <Button
-              onClick={handleOptimizeRoute}
-              disabled={isOptimizing || deliveries.length < 2}
-              className="w-full bg-green-600 text-white hover:bg-green-700"
-            >
-              {isOptimizing ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Otimizando...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  Otimizar Rota
-                </>
-              )}
-            </Button>
-
-            {optimizationResult && optimizationResult.totalDistance > 0 && (
-              <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-                <p className="text-sm font-medium text-green-900 dark:text-green-100">
-                  🤖 Rota Otimizada ✅
-                </p>
-                <p className="text-xs text-green-700 dark:text-green-300 mt-1">
-                  Distância: {(optimizationResult.totalDistance / 1000).toFixed(2)} km
-                </p>
-                <p className="text-xs text-green-700 dark:text-green-300 mt-1">
-                  Duração: {Math.round(optimizationResult.totalDuration / 60)} min
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="flex-1 overflow-y-auto px-4 pb-20">
-            <DeliveryList
-              deliveries={deliveries}
-              onEdit={handleEdit}
-              onRemove={handleRemove}
-              onReorder={handleReorder}
+      <Sidebar className="z-10 flex h-full min-h-svh w-full max-w-md flex-col justify-between overflow-y-auto border-r bg-background/90 p-4 shadow-lg backdrop-blur">
+        <div className="space-y-4">
+          <div className="flex items-center justify-center">
+            <img
+              src="https://cargon.com.br/wp-content/uploads/logo-azul.svg"
+              alt="Logo Cargon"
+              className="h-10 w-auto"
+              loading="lazy"
             />
           </div>
-        </Sidebar>
+          <AddDeliveryForm onAdd={handleAddDelivery} />
+          <Button
+            onClick={handleOptimizeRoute}
+            disabled={isOptimizing || deliveries.length < 2}
+            className="w-full bg-green-600 text-white hover:bg-green-700"
+          >
+            {isOptimizing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Otimizando...
+              </>
+            ) : (
+              <>
+                <Sparkles className="mr-2 h-4 w-4" />
+                Otimizar Rota
+              </>
+            )}
+          </Button>
+
+          {optimizationResult && optimizationResult.totalDistance > 0 && (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-900/20">
+              <p className="text-sm font-medium text-green-900 dark:text-green-100">
+                Rota otimizada.
+              </p>
+              <p className="mt-1 text-xs text-green-700 dark:text-green-300">
+                Distância: {(optimizationResult.totalDistance / 1000).toFixed(2)} km
+              </p>
+              <p className="mt-1 text-xs text-green-700 dark:text-green-300">
+                Duração: {Math.round(optimizationResult.totalDuration / 60)} min
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 overflow-y-auto pb-20">
+          <DeliveryList
+            deliveries={deliveries}
+            onEdit={handleEdit}
+            onRemove={handleRemove}
+            onReorder={handleReorder}
+          />
+        </div>
+      </Sidebar>
+
+      <SidebarInset className="flex-1 p-0">
+        <div className="relative h-full min-h-svh w-full">
+          <MapboxMap deliveries={deliveries} route={optimizationResult} />
+        </div>
 
         {editingDelivery && (
           <EditDeliveryDialog
@@ -269,7 +334,7 @@ const Index = () => {
             onOpenChange={(open) => !open && setEditingDelivery(null)}
           />
         )}
-      </div>
+      </SidebarInset>
     </SidebarProvider>
   );
 };

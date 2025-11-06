@@ -40,6 +40,17 @@ export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
         };
     }, []);
 
+    useEffect(() => {
+        const handleResize = () => {
+            if (map.current) {
+                map.current.resize();
+            }
+        };
+
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
     // Update markers
     useEffect(() => {
         if (!map.current) return;
@@ -164,8 +175,8 @@ export const MapboxMap = ({ deliveries, route }: MapboxMapProps) => {
     }, [route]);
 
     return (
-        <div className="w-full h-full relative">
-            <div ref={mapContainer} className="absolute inset-0" />
+        <div className="relative h-full w-full">
+            <div ref={mapContainer} className="h-full w-full" />
         </div>
     );
 };
